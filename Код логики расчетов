@@ -1,0 +1,67 @@
+import pandas as pd
+import calendar
+
+# Функция преобразования названий месяцев
+month_mapping = {
+    "январь": 1, "февраль": 2, "март": 3, "апрель": 4, "май": 5, "июнь": 6,
+    "июль": 7, "август": 8, "сентябрь": 9, "октябрь": 10, "ноябрь": 11, "декабрь": 12
+}
+
+def parse_russian_month_year(month_str):
+    try:
+        month_name, year = month_str.split()
+        month_num = month_mapping.get(month_name.lower(), None)
+        if month_num:
+            return pd.Timestamp(year=int(year), month=month_num, day=1)
+    except:
+        return None
+
+# Загрузка данных
+prolongations_df = pd.read_csv("prolongations.csv", encoding="utf-8")
+financial_data_df = pd.read_csv("financial_data.csv", encoding="utf-8")
+
+# Преобразуем названия месяцев в числа
+prolongations_df["month"] = prolongations_df["month"].apply(parse_russian_month_year)
+
+# Преобразование сумм в числовой формат
+month_columns = financial_data_df.columns[2:-1]
+financial_data_df[month_columns] = financial_data_df[month_columns].applymap(
+    lambda x: float(str(x).replace(" ", "").replace(",", ".")) if pd.notnull(x) else 0
+)
+
+# Агрегируем дубли по ID
+financial_data_aggregated = financial_data_df.groupby("id", as_index=False).sum()
+
+# Объединяем данные
+data = prolongations_df.merge(financial_data_aggregated, on="id", how="left")
+
+# Расчет коэффициентов пролонгации
+prolongation_rates = []
+months = list(month_mapping.keys())
+
+for i in range(len(months) - 2):
+    prev_month, first_prolong_month, second_prolong_month = months[i:i+3]
+    if prev_month in data.columns and first_prolong_month in data.columns:
+        for manager in data["AM"].unique():
+            manager_data = data[data["AM"] == manager]
+            total_last_month = manager_data[prev_month].sum()
+            first_prolong_total = manager_data[first_prolong_month].sum()
+            second_prolong_total = manager_data.loc[manager_data[first_prolong_month] == 0, second_prolong_month].sum()
+            
+            first_prolong_rate = first_prolong_total / total_last_month if total_last_month > 0 else None
+            second_prolong_rate = second_prolong_total / total_last_month if total_last_month > 0 else None
+            
+            prolongation_rates.append({
+                "Менеджер": manager,
+                "Месяц": first_prolong_month,
+                "Коэффициент пролонгации (1 мес.)": first_prolong_rate,
+                "Коэффициент пролонгации (2 мес.)": second_prolong_rate
+            })
+
+# Создание DataFrame с результатами
+prolongation_df = pd.DataFrame(prolongation_rates)
+
+# Сохранение в Excel
+prolongation_df.to_excel("prolongation_report.xlsx", index=False)
+
+print("Готово! Файл сохранен как prolongation_report.xlsx")
